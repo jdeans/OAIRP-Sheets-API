@@ -1,53 +1,66 @@
-import csv
 import cx_Oracle
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from string import ascii_uppercase
 
+#connect to Oracle DB
+dsnstr = cx_Oracle.makedsn("banner.university.edu", "port", "dsn name")
+con = cx = cx_Oracle.connect(user = "username", password = "password", dsn = dsnstr)
+cur = con.cursor()
 
-#Written in Python3 by Joshua Deans for presentation @ OAIRP 2017
+#execute a query
+cur.execute("Your query here! Exclude semi-colon")
+data = cur.fetchall()
 
-def connect_sheets(keyfile, bookname, sheetname = 'Sheet1'):
-    #connect to a workbook and sheet
-    scope = ['https://spreadsheets.google.com/feeds']
-    credentials = ServiceAccountCredentials.from_json_keyfile_name(keyfile, scope)
-    gc = gspread.authorize(credentials)
-    wks = gc.open(bookname).worksheet(sheetname)
+#close cursor and connection
+cur.close()
+con.close()
 
-    return wks
+#connect to sheets API
+scope = ['https://spreadsheets.google.com/feeds']
+credentials = ServiceAccountCredentials.from_json_keyfile_name('API json keyfile location', scope)
+gc = gspread.authorize(credentials)
+wks = gc.open("my_workbook").worksheet("my_sheet")
 
-def connect_banner(loc, port, name, username, pwd):
-    #connect to banner, or another Oracle DB
-    dsnstr = cx_Oracle.makedsn(loc, port, name)
-    con = cx = cx_Oracle.connect(user = username, password = pwd, dsn = dsnstr)
-    cur = con.cursor()
+#you must tell the sheets API which cells to select for updating
+#this script always starts in cell A2 and then selects the appropriate 
+#column identifier and row number
+#we then feed this cell range into an object "cells"
+if len(data[0]) <= 26:
+    cell_range = ('A2:' + ascii_uppercase[len(data[0])-1]+str(len(data)+1))
+else:
+    cell_range = ('A2:' + ascii_uppercase[len(data[0])//26-1] +
+                      ascii_uppercase[len(data[0])%26-1] +
+                      str(len(data)+1))
+print ('Selected cell range: %s' %(cell_range))
+cells = wks.range(cell_range)
 
-    return cur
+#flatten data from an array into a list
+flattened_data = [item for sublist in data for item in sublist]
 
-def execute_query(query):
-    #takes argument 'query' and passes it to Oracle via the cursor
-    #returns the results as a list, which gspread likes
-    cur.execute(query)
+#clean and transform data
+#This is just an example of some of the cleaning I did 
+#to showcase why this process is advantageous
+colleges = {'Arts and Sciences':'Arts & Sciences', 'Business Administration':'Business'}
+flattened_data = [colleges[x] if x in colleges else x for x in flattened_data]
+flattened_data = ['' if x == None else x for x in flattened_data]
 
-    return cur.fetchall()
+print ('Updating %d rows' % (len(data)))
 
-def flatten(data):
-    #flattens query results into a list
-    return [item for siblist in data for item in sublist]
+#feed the flattened data into the cells object
+for x in range(len(flattened_data)):
+    cells[x].value = flattened_data[x]
 
-def get_range(start, unflattened_data):
-    #takes a user defined starting point (e.g. A2) and calculates the
-    #appropriate ending point (e.g. AB4567)
-    return start + ':' + (ascii_uppercase[(len(unflattened_data)-1)//26]) +
-                          str(len(unflattened_data)+1)
+#the sheets API limits the number of cells we can update at once to 40k
+#to be safe, I update in batches of 10k
+chunksize = 10000
+for i in range(0, len(flattened_data), chunksize):
+    wks.update_cells(cells[i:i+chunksize])
 
-def main():
-
-    query = ""
-    
-    chunksize = 10000
-    for x in range(0, len(flattened_data), chunksize):
-        wks.update_cells(cells[i:i+chunksize])
-
-if __name__ == "__main__":
-    main()
+#the script above pastes data into a specific cell range
+#the script below can be used to append data to the bottom of
+#your worksheet instead. It is a simpler, but much slower process
+"""
+for result in cur:
+    wks.append_row(result)
+"""
